@@ -6,3 +6,4 @@ matplotlib
 seaborn
 imbalanced-learn
 umap-learn
+xgboost
