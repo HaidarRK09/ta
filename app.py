@@ -198,18 +198,37 @@ def main():
     with tab3:
         st.header("Analisis DBSCAN untuk Data Minoritas")
 
-        if "X_processed" not in st.session_state:
+        if "X_processed" not in st.session_state or "y" not in st.session_state:
             st.warning("Harap selesaikan preprocessing di tab sebelumnya")
             st.stop()
 
-        X_processed = st.session_state.X_processed
-        y = st.session_state.y
+        try:
+            # Pastikan index konsisten
+            X_processed = st.session_state.X_processed.reset_index(drop=True)
+            y = st.session_state.y.reset_index(drop=True)
 
-        # Pisahkan data minoritas
-        majority_X = X_processed[y == 0]
-        minority_X = X_processed[y == 1]
-        majority_y = y[y == 0]
-        minority_y = y[y == 1]
+            # Validasi final
+            if len(X_processed) != len(y):
+                raise ValueError(
+                    f"Jumlah sampel tidak sama (X: {len(X_processed)}, y: {len(y)})"
+                )
+
+            if not set(y.unique()).issubset({0, 1}):
+                raise ValueError(f"Target mengandung nilai selain 0 dan 1: {y.unique()}")
+
+            # Pemisahan data yang aman
+            mask = (y == 1).to_numpy()
+            minority_X = X_processed[mask]
+            majority_X = X_processed[~mask]
+            minority_y = y[mask]
+            majority_y = y[~mask]
+
+            st.session_state.minority_X = minority_X
+            st.session_state.majority_X = majority_X
+
+        except Exception as e:
+            st.error(f"Error persiapan data DBSCAN: {str(e)}")
+            st.stop()
 
         # Parameter DBSCAN dengan session state untuk mempertahankan nilai
         if "eps" not in st.session_state:
