@@ -28,37 +28,48 @@ from sklearn.metrics import (
 
 # Konfigurasi halaman
 st.set_page_config(
-    layout="wide", page_title="Analisis Prediksi Serangan Jantung", page_icon="❤️"
+    layout="wide", page_title="Analisis Prediksi Dataset", page_icon="📊"
 )
 sns.set(style="whitegrid")
 
 # Sidebar untuk kontrol
 with st.sidebar:
     st.header("Pengaturan")
-    uploaded_file = st.file_uploader("Unggah dataset CSV", type="csv")
+    uploaded_file = st.file_uploader("Unggah dataset CSV", type=["csv"])
+
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        target_options = df.columns.tolist()
+        target_column = st.selectbox(
+            "Pilih kolom target",
+            options=target_options,
+            index=len(target_options) - 1 if "heart_attack" in target_options else 0,
+        )
+
+        # Konversi kolom target ke biner jika perlu
+        if df[target_column].nunique() > 2:
+            st.warning(
+                "Kolom target memiliki lebih dari 2 nilai unik. Akan dikonversi ke biner (nilai paling sering = 0, lainnya = 1)"
+            )
+            most_common = df[target_column].mode()[0]
+            df[target_column] = np.where(df[target_column] == most_common, 0, 1)
+
     test_size = st.slider("Ukuran data testing (%)", 10, 40, 20)
     random_state = st.number_input("Random State", 0, 100, 42)
     st.markdown("---")
     st.info(
-        "Aplikasi ini menganalisis data prediksi serangan jantung dengan teknik SMOTE-Tomek dan membandingkan model Random Forest vs XGBoost."
+        "Aplikasi ini menganalisis data dengan teknik SMOTE-Tomek dan membandingkan model Random Forest vs XGBoost."
     )
-
-
-# Fungsi untuk memuat data
-@st.cache_data
-def load_data(uploaded_file):
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-    else:
-        # Default dataset jika tidak ada unggahan
-        st.warning("Menggunakan dataset contoh karena tidak ada file yang diunggah")
-        df = pd.read_csv("heart_attack_prediction_indonesia.csv")
-    return df
 
 
 # Fungsi utama
 def main():
-    df = load_data(uploaded_file)
+    if "df" not in st.session_state or uploaded_file is None:
+        st.warning("Silakan unggah file CSV dan pilih kolom target melalui sidebar")
+        return
+
+    df = st.session_state.df
+    target_column = st.session_state.target_column
 
     # Tab untuk organisasi konten
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
@@ -84,21 +95,21 @@ def main():
             st.subheader("Informasi Dataset")
             st.text(df.info())
 
-        st.subheader("Distribusi Kelas Target")
+        st.subheader(f"Distribusi Kolom Target: {target_column}")
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
         # Countplot
-        sns.countplot(data=df, x="heart_attack", ax=ax1)
-        ax1.set_title("Distribusi Kelas Heart Attack")
+        sns.countplot(data=df, x=target_column, ax=ax1)
+        ax1.set_title(f"Distribusi {target_column}")
 
         # Pie chart
-        counts = df["heart_attack"].value_counts()
+        counts = df[target_column].value_counts()
         ax2.pie(
             counts,
-            labels=["Tidak Heart Attack (0)", "Heart Attack (1)"],
+            labels=[f"Kelas {i}" for i in counts.index],
             autopct="%1.2f%%",
             startangle=140,
-            colors=["skyblue", "salmon"],
+            colors=sns.color_palette("pastel"),
         )
         ax2.set_title("Proporsi Data")
         st.pyplot(fig)
@@ -395,6 +406,11 @@ def main():
             ax.legend(title="Model")
             st.pyplot(fig)
 
+
+# Simpan data di session state setelah upload
+if uploaded_file is not None:
+    st.session_state.df = df
+    st.session_state.target_column = target_column
 
 if __name__ == "__main__":
     main()
