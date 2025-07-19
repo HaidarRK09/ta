@@ -38,21 +38,36 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Unggah dataset CSV", type=["csv"])
 
     if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        target_options = df.columns.tolist()
-        target_column = st.selectbox(
-            "Pilih kolom target",
-            options=target_options,
-            index=len(target_options) - 1 if "heart_attack" in target_options else 0,
-        )
-
-        # Konversi kolom target ke biner jika perlu
-        if df[target_column].nunique() > 2:
-            st.warning(
-                "Kolom target memiliki lebih dari 2 nilai unik. Akan dikonversi ke biner (nilai paling sering = 0, lainnya = 1)"
+        try:
+            df = pd.read_csv(uploaded_file)
+            target_options = df.columns.tolist()
+            target_column = st.selectbox(
+                "Pilih kolom target",
+                options=target_options,
+                index=(
+                    len(target_options) - 1 if "heart_attack" in target_options else 0
+                ),
             )
-            most_common = df[target_column].mode()[0]
-            df[target_column] = np.where(df[target_column] == most_common, 0, 1)
+
+            # Konversi kolom target ke biner jika perlu
+            if df[target_column].nunique() > 2:
+                st.warning(
+                    "Kolom target memiliki lebih dari 2 nilai unik. Akan dikonversi ke biner (nilai paling sering = 0, lainnya = 1)"
+                )
+                most_common = df[target_column].mode()[0]
+                df[target_column] = np.where(df[target_column] == most_common, 0, 1)
+
+            # Batasi ukuran dataset untuk performa
+            if len(df) > 10000:
+                st.warning("Dataset terlalu besar, mengambil sample 5000 baris acak")
+                df = df.sample(5000, random_state=42)
+
+            st.session_state.df = df
+            st.session_state.target_column = target_column
+
+        except Exception as e:
+            st.error(f"Error membaca file: {str(e)}")
+            st.stop()
 
     test_size = st.slider("Ukuran data testing (%)", 10, 40, 20)
     random_state = st.number_input("Random State", 0, 100, 42)
@@ -61,10 +76,9 @@ with st.sidebar:
         "Aplikasi ini menganalisis data dengan teknik SMOTE-Tomek dan membandingkan model Random Forest vs XGBoost."
     )
 
-
 # Fungsi utama
 def main():
-    if "df" not in st.session_state or uploaded_file is None:
+    if "df" not in st.session_state or st.session_state.df is None:
         st.warning("Silakan unggah file CSV dan pilih kolom target melalui sidebar")
         return
 
@@ -93,7 +107,9 @@ def main():
 
         with col2:
             st.subheader("Informasi Dataset")
-            st.text(df.info())
+            buffer = st.container()
+            with buffer:
+                st.text(df.info())
 
         st.subheader(f"Distribusi Kolom Target: {target_column}")
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -116,17 +132,22 @@ def main():
 
         # Korelasi numerik
         num_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
-        st.subheader("Korelasi Variabel Numerik")
-        fig, ax = plt.subplots(figsize=(10, 8))
-        sns.heatmap(df[num_cols].corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-        st.pyplot(fig)
+        if len(num_cols) > 1:  # Hanya tampilkan jika ada cukup kolom numerik
+            st.subheader("Korelasi Variabel Numerik")
+            fig, ax = plt.subplots(figsize=(10, 8))
+            sns.heatmap(
+                df[num_cols].corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax
+            )
+            st.pyplot(fig)
+        else:
+            st.warning("Tidak cukup kolom numerik untuk menampilkan heatmap")
 
     with tab2:
         st.header("Preprocessing Data")
 
         # Pisah fitur dan target
-        X = df.drop(columns="heart_attack")
-        y = df["heart_attack"]
+        X = df.drop(columns=target_column)
+        y = df[target_column]
 
         # Deteksi kolom
         cat_cols = X.select_dtypes(include="object").columns.tolist()
@@ -134,40 +155,55 @@ def main():
 
         # OneHot Encoding
         st.subheader("One-Hot Encoding")
-        encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-        encoded = encoder.fit_transform(X[cat_cols])
-        encoded_df = pd.DataFrame(
-            encoded, columns=encoder.get_feature_names_out(cat_cols)
-        )
+        try:
+            encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+            encoded = encoder.fit_transform(X[cat_cols])
+            encoded_df = pd.DataFrame(
+                encoded, columns=encoder.get_feature_names_out(cat_cols)
+            )
 
-        # Normalisasi
-        st.subheader("Normalisasi Fitur Numerik")
-        scaler = MinMaxScaler()
-        scaled = scaler.fit_transform(X[num_cols])
-        scaled_df = pd.DataFrame(scaled, columns=num_cols)
+            # Normalisasi
+            st.subheader("Normalisasi Fitur Numerik")
+            scaler = MinMaxScaler()
+            scaled = scaler.fit_transform(X[num_cols])
+            scaled_df = pd.DataFrame(scaled, columns=num_cols)
 
-        # Gabungkan hasil preprocessing
-        X_processed = pd.concat(
-            [scaled_df.reset_index(drop=True), encoded_df.reset_index(drop=True)],
-            axis=1,
-        )
+            # Gabungkan hasil preprocessing
+            X_processed = pd.concat(
+                [scaled_df.reset_index(drop=True), encoded_df.reset_index(drop=True)],
+                axis=1,
+            )
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("Sebelum Preprocessing:", X[cat_cols].head())
-        with col2:
-            st.write("Setelah Encoding:", encoded_df.head())
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("Sebelum Preprocessing:", X[cat_cols].head())
+            with col2:
+                st.write("Setelah Encoding:", encoded_df.head())
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("Sebelum Normalisasi:", X[num_cols].head())
-        with col2:
-            st.write("Setelah Normalisasi:", scaled_df.head())
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("Sebelum Normalisasi:", X[num_cols].head())
+            with col2:
+                st.write("Setelah Normalisasi:", scaled_df.head())
 
-        st.success(f"Data berhasil diproses! Dimensi akhir: {X_processed.shape}")
+            st.success(f"Data berhasil diproses! Dimensi akhir: {X_processed.shape}")
+
+            st.session_state.X_processed = X_processed
+            st.session_state.y = y
+
+        except Exception as e:
+            st.error(f"Error dalam preprocessing: {str(e)}")
+            st.stop()
 
     with tab3:
         st.header("Analisis DBSCAN untuk Data Minoritas")
+
+        if "X_processed" not in st.session_state:
+            st.warning("Harap selesaikan preprocessing di tab sebelumnya")
+            st.stop()
+
+        X_processed = st.session_state.X_processed
+        y = st.session_state.y
 
         # Pisahkan data minoritas
         majority_X = X_processed[y == 0]
@@ -175,67 +211,111 @@ def main():
         majority_y = y[y == 0]
         minority_y = y[y == 1]
 
-        # Parameter DBSCAN
+        # Parameter DBSCAN dengan session state untuk mempertahankan nilai
+        if "eps" not in st.session_state:
+            st.session_state.eps = 2.3
+        if "min_samples" not in st.session_state:
+            st.session_state.min_samples = 86
+
         col1, col2 = st.columns(2)
         with col1:
-            eps = st.slider("Nilai EPS untuk DBSCAN", 1.0, 5.0, 2.3, 0.1)
+            eps = st.slider(
+                "Nilai EPS untuk DBSCAN",
+                1.0,
+                5.0,
+                st.session_state.eps,
+                0.1,
+                key="eps_slider",
+            )
         with col2:
-            min_samples = st.slider("Min Samples untuk DBSCAN", 5, 100, 86)
+            min_samples = st.slider(
+                "Min Samples untuk DBSCAN",
+                5,
+                100,
+                st.session_state.min_samples,
+                key="min_samples_slider",
+            )
 
-        # Jalankan DBSCAN
-        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-        dbscan.fit(minority_X)
-        labels = dbscan.labels_
+        # Button untuk menjalankan DBSCAN
+        if st.button("Jalankan DBSCAN"):
+            st.session_state.eps = eps
+            st.session_state.min_samples = min_samples
 
-        # Hitung titik
-        core_points = set(dbscan.core_sample_indices_)
-        noise_points = set([i for i, label in enumerate(labels) if label == -1])
-        border_points = set(range(len(minority_X))) - core_points - noise_points
+            with st.spinner("Menjalankan DBSCAN..."):
+                try:
+                    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+                    dbscan.fit(minority_X)
+                    labels = dbscan.labels_
 
-        # Visualisasi
-        st.subheader("Hasil Clustering DBSCAN")
-        pca = PCA(n_components=2)
-        minority_X_2d = pca.fit_transform(minority_X)
+                    # Hitung titik
+                    core_points = set(dbscan.core_sample_indices_)
+                    noise_points = set(
+                        [i for i, label in enumerate(labels) if label == -1]
+                    )
+                    border_points = (
+                        set(range(len(minority_X))) - core_points - noise_points
+                    )
 
-        fig = plt.figure(figsize=(10, 6))
-        plt.scatter(
-            minority_X_2d[list(noise_points), 0],
-            minority_X_2d[list(noise_points), 1],
-            c="red",
-            s=20,
-            label="Noise Points",
-            alpha=0.9,
-        )
-        plt.scatter(
-            minority_X_2d[list(border_points), 0],
-            minority_X_2d[list(border_points), 1],
-            c="orange",
-            s=5,
-            label="Border Points",
-            alpha=0.6,
-        )
-        plt.scatter(
-            minority_X_2d[list(core_points), 0],
-            minority_X_2d[list(core_points), 1],
-            c="blue",
-            s=5,
-            label="Core Points",
-            alpha=0.6,
-        )
-        plt.title("Visualisasi PCA (DBSCAN pada Data Minoritas)")
-        plt.legend()
-        st.pyplot(fig)
+                    # Visualisasi
+                    st.subheader("Hasil Clustering DBSCAN")
+                    pca = PCA(n_components=2)
+                    minority_X_2d = pca.fit_transform(minority_X)
 
-        # Info cluster
-        st.info(
-            f"""
-        **Hasil DBSCAN:**
-        - Total Data Minoritas: {len(minority_X)}
-        - Core Points: {len(core_points)} 
-        - Border Points: {len(border_points)}
-        - Noise Points: {len(noise_points)}
-        """
-        )
+                    fig = plt.figure(figsize=(10, 6))
+                    plt.scatter(
+                        minority_X_2d[list(noise_points), 0],
+                        minority_X_2d[list(noise_points), 1],
+                        c="red",
+                        s=20,
+                        label="Noise Points",
+                        alpha=0.9,
+                    )
+                    plt.scatter(
+                        minority_X_2d[list(border_points), 0],
+                        minority_X_2d[list(border_points), 1],
+                        c="orange",
+                        s=5,
+                        label="Border Points",
+                        alpha=0.6,
+                    )
+                    plt.scatter(
+                        minority_X_2d[list(core_points), 0],
+                        minority_X_2d[list(core_points), 1],
+                        c="blue",
+                        s=5,
+                        label="Core Points",
+                        alpha=0.6,
+                    )
+                    plt.title("Visualisasi PCA (DBSCAN pada Data Minoritas)")
+                    plt.legend()
+                    st.pyplot(fig)
+
+                    # Info cluster
+                    st.info(
+                        f"""
+                    **Hasil DBSCAN:**
+                    - Total Data Minoritas: {len(minority_X)}
+                    - Core Points: {len(core_points)} 
+                    - Border Points: {len(border_points)}
+                    - Noise Points: {len(noise_points)}
+                    """
+                    )
+
+                    # Simpan hasil untuk tab berikutnya
+                    st.session_state.core_points = core_points
+                    st.session_state.minority_X = minority_X
+                    st.session_state.majority_X = majority_X
+                    st.session_state.minority_y = minority_y
+                    st.session_state.majority_y = majority_y
+
+                except Exception as e:
+                    st.error(f"Error dalam DBSCAN: {str(e)}")
+                    st.stop()
+        else:
+            if "core_points" in st.session_state:
+                st.info(
+                    "Gunakan tombol 'Jalankan DBSCAN' untuk memperbarui hasil dengan parameter baru"
+                )
 
     with tab4:
         st.header("Pemodelan Machine Learning")
